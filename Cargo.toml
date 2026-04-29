@@ -1,0 +1,13 @@
+[package]
+name = "nxoc_core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rodio = "0.22.2"
+crossbeam = "0.8.4"
+anyhow = "1.0.100"
+dirs = "6.0.0"
+serde = { version = "1.0.228", features = ["derive"] }
+toml = { version = "0.9.10", features = ["serde"] }
+rand = "0.9.2"
