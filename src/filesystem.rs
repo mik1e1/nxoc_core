@@ -18,44 +18,115 @@ pub trait Storable {
 // multiple playlists, id est library
 pub const LIBRARY_RELATIVE_PATH: &str = "nxoc/data/library.toml";
 
-// pub enum AudioNodeType {
-//     Folder,
-//     AudioFile,
-// }
-//
-// pub struct AudioNode {
-//     path: PathBuf,
-//     node_type: AudioNodeType,
-//     children: Option<Vec<AudioNode>>,
-// }
-//
-// pub fn produce_audio_node(path: &Path) -> anyhow::Result<AudioNode> {
-//     let node_type_opt = if path.is_file()
-//         && let Some(ext) = path.extension()
-//         && SUPPORTED_FORMATS
-//             .into_iter()
-//             .any(|x| *x == ext.to_string_lossy())
-//     {
-//         Some(AudioNodeType::AudioFile)
-//     } else if path.is_dir() {
-//         Some(AudioNodeType::Folder)
-//     } else {
-//         None
-//     };
-//
-//     if let Some(node_type) = node_type_opt {
-//         let mut root = AudioNode {
-//             path: path.to_path_buf(),
-//             node_type,
-//             children: None,
-//         };
-//
-//         return Ok(root);
-//     } else {
-//         Err(anyhow!("Called function on miscellanious file"))
-//     }
-// }
-//
+#[derive(Debug, Clone)]
+pub struct Folder {
+    pub path: PathBuf,
+    pub children: Vec<AudioNode>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AudioFile {
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub enum AudioNode {
+    Folder(Folder),
+    AudioFile(AudioFile),
+}
+
+impl TryFrom<&Path> for AudioNode {
+    type Error = anyhow::Error;
+
+    fn try_from(path: &Path) -> anyhow::Result<AudioNode> {
+        if path.is_file() {
+            let ext_opt = path.extension().and_then(|x| x.to_str());
+
+            if let Some(ext) = ext_opt
+                && SUPPORTED_FORMATS.iter().any(|fmt| *fmt == ext)
+            {
+                return Ok(AudioNode::AudioFile(AudioFile {
+                    path: path.to_path_buf(),
+                }));
+            }
+        }
+
+        if path.is_dir() {
+            let children: Vec<AudioNode> = fs::read_dir(path)?
+                .filter_map(|entry| entry.ok())
+                .filter_map(|entry| AudioNode::try_from(entry.path().as_path()).ok())
+                .collect();
+
+            return Ok(AudioNode::Folder(Folder {
+                path: path.to_path_buf(),
+                children,
+            }));
+        }
+
+        Err(anyhow!(
+            "Unsupported file format or nonexistent path: {:?}",
+            path
+        ))
+    }
+}
+
+impl AudioNode {
+    pub fn is_track(&self) -> bool {
+        match self {
+            AudioNode::AudioFile(_) => true,
+            AudioNode::Folder(_) => false,
+        }
+    }
+
+    pub fn folders(&self) -> usize {
+        self.iter()
+            .filter_map(AudioNode::as_folder)
+            .fold(0, |acc, _| acc + 1)
+    }
+
+    pub fn as_folder(&self) -> Option<&Folder> {
+        match self {
+            AudioNode::Folder(f) => Some(f),
+            _ => None,
+        }
+    }
+
+    pub fn path(&self) -> &Path {
+        match self {
+            AudioNode::AudioFile(af) => &af.path,
+            AudioNode::Folder(f) => &f.path,
+        }
+    }
+
+    pub fn iter(&self) -> Box<dyn Iterator<Item = &AudioNode> + '_> {
+        match self {
+            AudioNode::AudioFile(_) => Box::new(std::iter::once(self)),
+            AudioNode::Folder(f) => {
+                Box::new(std::iter::once(self).chain(f.children.iter().flat_map(|x| x.iter())))
+            }
+        }
+    }
+
+    pub fn prune(self) -> Option<AudioNode> {
+        match self {
+            AudioNode::AudioFile(_) => Some(self),
+            AudioNode::Folder(mut f) => {
+                f.children = f
+                    .children
+                    .into_iter()
+                    .filter_map(|entry| entry.prune())
+                    .collect();
+
+                if f.children.is_empty() {
+                    None
+                } else {
+                    Some(AudioNode::Folder(f))
+                }
+            }
+        }
+    }
+}
+
 pub fn scan_dir_rec(path: &Path) -> anyhow::Result<impl Iterator<Item = PathBuf>> {
     fn inner(path: &PathBuf) -> anyhow::Result<Box<dyn Iterator<Item = PathBuf>>> {
         match fs::read_dir(path) {
